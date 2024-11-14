@@ -7,32 +7,27 @@
 </head>
 <body>
     <xmp>
-lex
-
-
 %{
-    #include <stdio.h>
     #include "q.tab.h"
 %}
 
+
 %%
 "#include"[ ]*"<"[^>]*">"    { printf("%s - preprocessor directive\n", yytext); return INCLUDE; }
-"int"                                         { printf("int - keyword\n"); return INT_TYPE; }
-"float"                                     { printf("float - keyword\n"); return FLOAT_TYPE; }
-"if"                                             { printf("if - keyword\n"); return IF; }
-"else"                                       { printf("else - keyword\n"); return ELSE; }
-"while"                                     { printf("while - keyword\n"); return WHILE; }
-[a-zA-Z_][a-zA-Z0-9_]*       { printf("%s - identifier\n", yytext); yylval.str = strdup(yytext); return ID; }
+"int"                        { printf("int - keyword\n"); return INT_TYPE; }
+"float"                      { printf("float - keyword\n"); return FLOAT_TYPE; }
+"if"                         { printf("if - keyword\n"); return IF; }
+"else"                       { printf("else - keyword\n"); return ELSE; }
+"while"                      { printf("while - keyword\n"); return WHILE; }
+[a-zA-Z_][a-zA-Z0-9_]*      { printf("%s - identifier\n", yytext); yylval.str = strdup(yytext); return ID; }
 [0-9]+                       { printf("%s - integer constant\n", yytext); yylval.intval = atoi(yytext); return INT; }
-[0-9]+\.[0-9]+               { printf("%s - float constant\n", yytext); yylval.fltval = atof(yytext); return FLOAT; }
+[0-9]+\.[0-9]+              { printf("%s - float constant\n", yytext); yylval.fltval = atof(yytext); return FLOAT; }
 ">"                          { printf("> - relational operator\n"); return GT; }
 "<"                          { printf("< - relational operator\n"); return LT; }
 ">="                         { printf(">= - relational operator\n"); return GE; }
 "<="                         { printf("<= - relational operator\n"); return LE; }
 "=="                         { printf("== - relational operator\n"); return EQ; }
 "!="                         { printf("!= - relational operator\n"); return NE; }
-
-
 "="                          { printf("= - assignment operator\n"); return EQUAL; }
 "{"                          { printf("{ - special character\n"); return LBRACE; }
 "}"                          { printf("} - special character\n"); return RBRACE; }
@@ -40,23 +35,22 @@ lex
 ")"                          { printf(") - special character\n"); return RPAREN; }
 ";"                          { printf("; - special character\n"); return SEMI; }
 ","                          { printf(", - special character\n"); return yytext[0]; }
-"//".*                       { printf("%s - multiline comment\n",yytext);}
+"//".*                         { printf("%s - multiline comment\n",yytext);}
 "+"                          { printf("+ - Arithmetic Operator\n"); return PLUS; }
 "-"                          { printf("- - Arithmetic Operator\n"); return MINUS; }
 "*"                          { printf("* - Arithmetic Operator\n"); return STAR; }
 "/"                          { printf("/ - Arithmetic Operator\n"); return DIV; }
-[ \t\n]                      { ; }
-.                            { printf("%s - special character\n", yytext); return yytext[0]; }
+[ \t\n]                     { ; }
+.                           { printf("%s - special character\n", yytext); return yytext[0]; }
+"/*"([^*]|\*+([^*/]))*"*/" { printf("%s - multiline comment\n",yytext);}
+
 %%
-
-yacc 
-
-
 %{
     #include <stdio.h>
     #include <stdlib.h>
     #include <string.h>
     #include <math.h>
+    #include <ctype.h>
 
     void yyerror(const char *s);
     int yylex(void);
@@ -70,14 +64,10 @@ yacc
         return labels++;
     }    
 
-
-
     int varCounter() {
         static int variables = 0;
         return variables++;
     }
-
-
 
     typedef struct Node {
         int intval;
@@ -86,10 +76,14 @@ yacc
         char *optcode;
         char *tac;
         char *opttac;
-
-
         char *gen;
+        char *optgen;
     } Node;
+
+    void constant_folding(struct Node* res,struct Node* left ,struct Node* right,char op);
+    void algebraic_identity(struct Node* res,struct Node* left ,struct Node* right,char op);
+    void strength_reduction(struct Node* res,struct Node* left ,struct Node* right,char op);
+
 
     Node *makeNode() {
         Node *n = (Node *)malloc(sizeof(Node));
@@ -100,6 +94,7 @@ yacc
         n->tac = (char *)malloc(sizeof(char) * 1024);
         n->opttac = (char *)malloc(sizeof(char) * 1024);
         n->gen = (char *)malloc(sizeof(char) * 1024);
+        n->optgen = (char *)malloc(sizeof(char) * 1024);
         return n;
     }
 %}
@@ -115,14 +110,14 @@ yacc
 %token <intval> INT
 %token <fltval> FLOAT
 %token GT LT GE LE EQ NE
+%token PLUS MINUS STAR DIV LBRACE RBRACE LPAREN RPAREN EQUAL SEMI
+
 
 %left '+' '-'
 %left '*' '/' '%'
 
 %nonassoc UMINUS
-%token PLUS MINUS STAR DIV LBRACE RBRACE LPAREN RPAREN EQUAL SEMI
 %type <node> Program GlobalStmts GlobalStmt Block Stmts Stmt Decl Type Assign Expr WhileStmt IfStmt Condition Term Factor
-
 
 %%
 
@@ -137,8 +132,8 @@ Program : GlobalStmts {
             printf("%s\n", $1->opttac);
             printf("\n---MACHINE CODE---\n");
             printf("%s\n", $1->gen);
-
-
+            printf("\n---OPT MACHINE CODE---\n");
+            printf("%s\n", $1->optgen);
         }
         ;
 
@@ -147,6 +142,7 @@ GlobalStmts : GlobalStmt GlobalStmts {
             sprintf($$->tac, "%s%s", $1->tac, $2->tac);
             sprintf($$->opttac, "%s%s", $1->opttac, $2->opttac);
             sprintf($$->gen, "%s%s", $1->gen, $2->gen);
+            sprintf($$->optgen, "%s%s", $1->optgen, $2->optgen);
         }
         | GlobalStmt { $$ = $1; }
         ;
@@ -165,6 +161,7 @@ Stmts   : Stmt Stmts {
             sprintf($$->tac, "%s%s", $1->tac, $2->tac);
             sprintf($$->opttac, "%s%s", $1->opttac, $2->opttac);
             sprintf($$->gen, "%s%s", $1->gen, $2->gen);
+            sprintf($$->optgen, "%s%s", $1->optgen, $2->optgen);
         }
         | Stmt { $$ = $1; }
         ;
@@ -180,15 +177,16 @@ Decl    : Type ID {
             sprintf($$->tac, "declare %s\n", $2);
             sprintf($$->opttac, "declare %s\n", $2);
             sprintf($$->gen, "ALLOC %s\n", $2);
+            sprintf($$->optgen, "ALLOC %s\n", $2);
         }
         | Type Assign {
             $$ = makeNode();
             sprintf($$->tac, "declare %s\n%s", $2->code, $2->tac);
             sprintf($$->opttac, "declare %s\n%s", $2->code, $2->opttac);
             sprintf($$->gen, "ALLOC %s\n%s", $2->code, $2->gen);
+            sprintf($$->optgen, "ALLOC %s\n%s", $2->code, $2->optgen);
         }
         ;
-
 
 Type    : INT_TYPE { $$ = makeNode(); }
         | FLOAT_TYPE { $$ = makeNode(); }
@@ -205,6 +203,8 @@ WhileStmt : WHILE LPAREN Condition RPAREN Block {
             sprintf($$->opttac, "%s", temp);
             sprintf($$->gen, "L%d:\n%sCMP %s, #0\nJZ L%d\n%sJMP L%d\nL%d:\n",
                     label1, $3->gen, $3->code, label2, $5->gen, label1, label2);
+            sprintf($$->optgen, "L%d:\n%sCMP %s, #0\nJZ L%d\n%sJMP L%d\nL%d:\n",
+                    label1, $3->optgen, $3->code, label2, $5->optgen, label1, label2);
         }
         ;
 
@@ -219,6 +219,8 @@ IfStmt  : IF LPAREN Condition RPAREN Block ELSE Block {
             sprintf($$->opttac, "%s", temp);
             sprintf($$->gen, "%sCMP %s, #0\nJZ L%d\n%sJMP L%d\nL%d:\n%sL%d:\n",
                     $3->gen, $3->code, label1, $5->gen, label2, label1, $7->gen, label2);
+            sprintf($$->optgen, "%sCMP %s, #0\nJZ L%d\n%sJMP L%d\nL%d:\n%sL%d:\n",
+                    $3->optgen, $3->code, label1, $5->optgen, label2, label1, $7->optgen, label2);
         }
         | IF LPAREN Condition RPAREN Block {
             $$ = makeNode();
@@ -230,6 +232,8 @@ IfStmt  : IF LPAREN Condition RPAREN Block ELSE Block {
             sprintf($$->opttac, "%s", temp);
             sprintf($$->gen, "%sCMP %s, #0\nJZ L%d\n%sL%d:\n",
                     $3->gen, $3->code, label1, $5->gen, label1);
+            sprintf($$->optgen, "%sCMP %s, #0\nJZ L%d\n%sL%d:\n",
+                    $3->optgen, $3->code, label1, $5->optgen, label1);
         }
         ;
 
@@ -239,12 +243,12 @@ Condition : Expr GT Expr {
             sprintf($$->code, "T%d", vc);
             sprintf($$->tac, "%s%s%s = %s > %s\n", 
                     $1->tac, $3->tac, $$->code, $1->code, $3->code);
-
-
             sprintf($$->opttac, "%s%s%s = %s > %s\n",
                     $1->opttac, $3->opttac, $$->code, $1->code, $3->code);
             sprintf($$->gen, "%s%sMOV %s, R0\nCMP %s, R0\nSGT %s\n",
                     $1->gen, $3->gen, $1->code, $3->code, $$->code);
+            sprintf($$->optgen, "%s%sMOV %s, R0\nCMP %s, R0\nSGT %s\n",
+                    $1->optgen, $3->optgen, $1->code, $3->code, $$->code);
         }
         | Expr LT Expr {
             $$ = makeNode();
@@ -256,13 +260,16 @@ Condition : Expr GT Expr {
                     $1->opttac, $3->opttac, $$->code, $1->code, $3->code);
             sprintf($$->gen, "%s%sMOV %s, R0\nCMP %s, R0\nSLT %s\n",
                     $1->gen, $3->gen, $1->code, $3->code, $$->code);
+            sprintf($$->optgen, "%s%sMOV %s, R0\nCMP %s, R0\nSLT %s\n",
+                    $1->optgen, $3->optgen, $1->code, $3->code, $$->code);
         }
-        | Expr {    /* Add this rule to handle single expressions in conditions */
+        | Expr {    
             $$ = makeNode();
             sprintf($$->code, "%s", $1->code);
             sprintf($$->tac, "%s", $1->tac);
             sprintf($$->opttac, "%s", $1->opttac);
             sprintf($$->gen, "%s", $1->gen);
+            sprintf($$->optgen, "%s", $1->optgen);
         }
         ;
        
@@ -274,10 +281,14 @@ Assign  : ID EQUAL Expr {
             sprintf(temp, "%s := %s\n", $$->code, $3->code);
             sprintf($$->tac, "%s%s", $3->tac, temp);
             sprintf($$->opttac, "%s%s", $3->opttac, temp);
-            sprintf($$->gen, "%s%sMOV %s, R0\nMOV R0, %s\n",
-                    $3->gen, temp, $3->code, $$->code);
+            sprintf($$->gen, "%sMOV %s, R0\nMOV R0, %s\n",
+                    $3->gen,$3->code, $$->code);
+            sprintf($$->optgen, "%sMOV %s, R0\nMOV R0, %s\n",
+                    $3->optgen,$3->code, $$->code);
         }
         ;
+
+
 
 Expr    : Expr PLUS Term {
             $$ = makeNode();
@@ -286,12 +297,11 @@ Expr    : Expr PLUS Term {
             char temp[100];
             sprintf(temp, "%s = %s + %s\n", $$->code, $1->code, $3->code);
             sprintf($$->tac, "%s%s%s", $1->tac, $3->tac, temp);
-            sprintf($$->opttac, "%s%s%s", $1->opttac, $3->opttac, temp);
+            //constant_folding($$,$1,$3,'+');
+            algebraic_identity($$,$1,$3,'+');
             sprintf($$->gen, "%s%sMOV %s, R0\nADD %s, R0\nMOV R0, %s\n",
                     $1->gen, $3->gen, $1->code, $3->code, $$->code);
         }
-
-
         | Expr MINUS Term {
             $$ = makeNode();
             int vc = varCounter();
@@ -299,7 +309,8 @@ Expr    : Expr PLUS Term {
             char temp[100];
             sprintf(temp, "%s = %s - %s\n", $$->code, $1->code, $3->code);
             sprintf($$->tac, "%s%s%s", $1->tac, $3->tac, temp);
-            sprintf($$->opttac, "%s%s%s", $1->opttac, $3->opttac, temp);
+            //constant_folding($$,$1,$3,'-');
+            algebraic_identity($$,$1,$3,'-');
             sprintf($$->gen, "%s%sMOV %s, R0\nSUB %s, R0\nMOV R0, %s\n",
                     $1->gen, $3->gen, $1->code, $3->code, $$->code);
         }
@@ -313,7 +324,9 @@ Term    : Term STAR Factor {
             char temp[100];
             sprintf(temp, "%s = %s * %s\n", $$->code, $1->code, $3->code);
             sprintf($$->tac, "%s%s%s", $1->tac, $3->tac, temp);
-            sprintf($$->opttac, "%s%s%s", $1->opttac, $3->opttac, temp);
+            //constant_folding($$,$1,$3,'*');
+            algebraic_identity($$,$1,$3,'*');
+            //strength_reduction($$,$1,$3,'*');
             sprintf($$->gen, "%s%sMOV %s, R0\nMUL %s, R0\nMOV R0, %s\n",
                     $1->gen, $3->gen, $1->code, $3->code, $$->code);
         }
@@ -324,9 +337,12 @@ Term    : Term STAR Factor {
             char temp[100];
             sprintf(temp, "%s = %s / %s\n", $$->code, $1->code, $3->code);
             sprintf($$->tac, "%s%s%s", $1->tac, $3->tac, temp);
-            sprintf($$->opttac, "%s%s%s", $1->opttac, $3->opttac, temp);
+            //constant_folding($$,$1,$3,'/');
+            algebraic_identity($$,$1,$3,'/');
+            //strength_reduction($$,$1,$3,'/');
             sprintf($$->gen, "%s%sMOV %s, R0\nDIV %s, R0\nMOV R0, %s\n",
                     $1->gen, $3->gen, $1->code, $3->code, $$->code);
+          
         }
         | Term '%' Factor {
             $$ = makeNode();
@@ -338,10 +354,11 @@ Term    : Term STAR Factor {
             sprintf($$->opttac, "%s%s%s", $1->opttac, $3->opttac, temp);
             sprintf($$->gen, "%s%sMOV %s, R0\nMOD %s, R0\nMOV R0, %s\n",
                     $1->gen, $3->gen, $1->code, $3->code, $$->code);
+            sprintf($$->optgen, "%s%sMOV %s, R0\nMOD %s, R0\nMOV R0, %s\n",
+                    $1->optgen, $3->optgen, $1->code, $3->code, $$->code);
         }
         | Factor { $$ = $1; }
         ;
-
 
 Factor  : INT {
             $$ = makeNode();
@@ -349,6 +366,7 @@ Factor  : INT {
             sprintf($$->tac, "");
             sprintf($$->opttac, "");
             sprintf($$->gen, "");
+            sprintf($$->optgen, "");
         }
         | FLOAT {
             $$ = makeNode();
@@ -356,6 +374,7 @@ Factor  : INT {
             sprintf($$->tac, "");
             sprintf($$->opttac, "");
             sprintf($$->gen, "");
+            sprintf($$->optgen, "");
         }
         | ID {
             $$ = makeNode();
@@ -363,6 +382,7 @@ Factor  : INT {
             sprintf($$->tac, "");
             sprintf($$->opttac, "");
             sprintf($$->gen, "");
+            sprintf($$->optgen, "");
         }
         | LPAREN Expr RPAREN { $$ = $2; }
         | MINUS Factor %prec UMINUS {
@@ -375,10 +395,139 @@ Factor  : INT {
             sprintf($$->opttac, "%s%s", $2->opttac, temp);
             sprintf($$->gen, "%sMOV %s, R0\nNEG R0\nMOV R0, %s\n",
                     $2->gen, $2->code, $$->code);
+            sprintf($$->optgen, "%sMOV %s, R0\nNEG R0\nMOV R0, %s\n",
+                    $2->optgen, $2->code, $$->code);
         }
         ;
 
 %%
+
+
+void constant_folding(struct Node* res,struct Node* left ,struct Node* right,char op){
+	if(isdigit(*left->code) && isdigit(*right->code)){
+                int temp;
+                switch(op){
+                        case '+':{
+                            temp=atoi(left->code)+atoi(right->code);
+                            break;
+                        };
+                        case '-':{
+                            temp=atoi(left->code)-atoi(right->code);
+                            break;
+                        };
+                        case '*':{
+                            temp=atoi(left->code)*atoi(right->code);
+                            break;
+                        };
+                        case '/':{
+                            temp=atoi(left->code)/atoi(right->code);
+                            break;
+                        };
+                }
+                sprintf(res->opttac,"%s%s%s:=%d\n",left->opttac,right->opttac,res->code,temp);
+                sprintf(res->optgen,"%s%sMOV %s, #%d\n",left->optgen,right->optgen,res->code,temp);
+        }
+        else{
+                char temp[100];
+                sprintf(temp,"%s=%s%c%s\n",res->code,left->code,op,right->code);
+                sprintf(res->opttac,"%s%s%s",left->opttac,right->opttac,temp);
+                switch(op){
+                        case '+':{
+                            sprintf(res->optgen, "%s%sMOV %s, R0\nADD %s, R0\nMOV R0, %s\n",left->optgen, right->optgen, left->code, right->code, res->code);
+                            break;
+                        };
+                        case '-':{
+                            sprintf(res->optgen, "%s%sMOV %s, R0\nSUB %s, R0\nMOV R0, %s\n",left->optgen, right->optgen, left->code, right->code, res->code);
+                            break;
+                        };
+                        case '*':{
+                            sprintf(res->optgen, "%s%sMOV %s, R0\nMUL %s, R0\nMOV R0, %s\n",left->optgen, right->optgen, left->code, right->code, res->code);
+                            break;
+                        };
+                        case '/':{
+                            sprintf(res->optgen, "%s%sMOV %s, R0\nDIV %s, R0\nMOV R0, %s\n",left->optgen, right->optgen, left->code, right->code, res->code);
+                            break;
+                        };
+                }
+        }
+}
+
+
+void strength_reduction(struct Node* res,struct Node* left ,struct Node* right,char op){
+	if(isdigit(*right->code)){
+                double expo=log(atoi(right->code))/log(2);
+                printf("expo %f",expo);
+                if(expo==(int)expo){
+                        printf("fdgdfdfdf");
+                        char temp[100];
+                        switch(op){
+                                case '*':{
+                                sprintf(temp,"%s=%s<<%f",res->code,left->code,log(atoi(right->code))/log(2));
+                                sprintf(res->optgen,"%s%sMOV %s, #%s\nSHL %s,%f\n",left->optgen,right->optgen,res->code,left->code,res->code,log(atoi(right->code))/log(2));
+                                break;
+                                };
+                                case '/':{
+                                sprintf(temp,"%s=%s>>%f",res->code,left->code,log(atoi(right->code))/log(2));
+                                sprintf(res->optgen,"%s%sMOV %s, #%s\nSHR %s,%f\n",left->optgen,right->optgen,res->code,left->code,res->code,log(atoi(right->code))/log(2));
+                                break;
+                                };
+                        }
+                        sprintf(res->opttac,"%s%s%s\n",left->opttac,right->opttac,temp);
+                }
+                else{
+                        char temp[100];
+                        sprintf(temp,"%s=%s%c%s\n",res->code,left->code,op,right->code);
+                        sprintf(res->opttac,"%s%s%s",left->opttac,right->opttac,temp);
+                        switch(op){
+                        case '*':{
+                            sprintf(res->optgen, "%s%sMOV %s, R0\nMUL %s, R0\nMOV R0, %s\n",left->optgen, right->optgen, left->code, right->code, res->code);
+                            break;
+                        };
+                        case '/':{
+                            sprintf(res->optgen, "%s%sMOV %s, R0\nDIV %s, R0\nMOV R0, %s\n",left->optgen, right->optgen, left->code, right->code, res->code);
+                            break;
+                        };
+                }
+                }
+        }
+        
+}
+
+
+void algebraic_identity(struct Node* res,struct Node* left ,struct Node* right,char op){
+        char temp[10];
+        if (isdigit(*right->code) && (atoi(right->code)==0 && op=='-') || (atoi(right->code)==0 && op=='+') ||  (atoi(right->code)==1 && op=='/') || (atoi(right->code)==1 && op=='*')){
+                printf("111111");
+                sprintf(temp,"%s",left->code);
+                sprintf(res->opttac,"%s%s%s:=%s\n",left->opttac,right->opttac,res->code,temp);
+                sprintf(res->optgen,"%s%sMOV %s, %s\n",left->optgen,right->optgen,res->code,temp);
+        }
+        else{
+                printf("222222");
+                char temp[100];
+                sprintf(temp,"%s=%s%c%s\n",res->code,left->code,op,right->code);
+                sprintf(res->opttac,"%s%s%s",left->opttac,right->opttac,temp);
+                switch(op){
+                case '+':{
+                        sprintf(res->optgen, "%s%sMOV %s, R0\nADD %s, R0\nMOV R0, %s\n",left->optgen, right->optgen, left->code, right->code, res->code);
+                        break;
+                };
+                case '-':{
+                        sprintf(res->optgen, "%s%sMOV %s, R0\nSUB %s, R0\nMOV R0, %s\n",left->optgen, right->optgen, left->code, right->code, res->code);
+                        break;
+                };
+                case '*':{
+                        sprintf(res->optgen, "%s%sMOV %s, R0\nMUL %s, R0\nMOV R0, %s\n",left->optgen, right->optgen, left->code, right->code, res->code);
+                        break;
+                };
+                case '/':{
+                        sprintf(res->optgen, "%s%sMOV %s, R0\nDIV %s, R0\nMOV R0, %s\n",left->optgen, right->optgen, left->code, right->code, res->code);
+                        break;
+                };
+
+        }
+        }
+}
 
 void yyerror(const char *s) {
     printf("Error: %s\n", s);
@@ -389,11 +538,10 @@ int yywrap() {
     return 1;
 }
 
+
 int main(void) {
     FILE *file = fopen("q.c", "r");
     if (!file) {
-
-
         printf("Error opening file\n");
         return 1;
     }
@@ -412,23 +560,10 @@ int main(void) {
     return 0;
 }
 
-INPUT
 
-#include <stdio.h>
 
-int a = 10;
-int b = 20;
-float c = 10.00;
 
-while(1) {
-    if(a > b) {
-        c = a - b;
-    }
-    else {
-        c = b - a;
-    }
-    a = a - 1;
-}
+
 
 yacc -d filename.y
 lex filename.l
